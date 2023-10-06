@@ -17,23 +17,46 @@ declare(strict_types=1);
 
 namespace BeechIt\FalSecuredownload\EventListener;
 
-use BeechIt\FalSecuredownload\Aspects\SolrFalAspect;
+use BeechIt\FalSecuredownload\Aspects\PublicUrlAspect;
+use BeechIt\FalSecuredownload\Security\CheckPermissions;
 use TYPO3\CMS\Core\Utility\GeneralUtility;
+use TYPO3\CMS\Core\Resource\File;
+use TYPO3\CMS\Core\Utility\ArrayUtility;
 
 final class AfterFileMetaDataHasBeenRetrievedEventListener
     {
 
-    protected SolrFalAspect $solrFalAspect;
+    protected CheckPermissions $checkPermissionsService;
+    protected PublicUrlAspect $publicUrlAspect;
 
     public function __construct()
         {
-        $this->solrFalAspect = GeneralUtility::makeInstance( SolrFalAspect::class);
+        $this->checkPermissionsService = GeneralUtility::makeInstance( CheckPermissions::class);
+        $this->publicUrlAspect         = GeneralUtility::makeInstance( PublicUrlAspect::class);
         }
     public function __invoke(\ApacheSolrForTypo3\Solrfal\Event\Indexing\AfterFileMetaDataHasBeenRetrievedEvent $event): void
         {
+        $metadata = $event->getMetaData();
+        $item     = $event->getFileIndexQueueItem();
+        if ($item->getFile() instanceof File && !$item->getFile()->getStorage()->isPublic()) {
+            $resourcePermissions = $this->checkPermissionsService->getPermissions( $item->getFile() );
+            // If there are already permissions set, refine these with actual file permissions
+            if ($metadata['fe_groups']) {
+                $metadata['fe_groups'] = implode(
+                    ',',
+                    ArrayUtility::keepItemsInArray( explode( ',', $resourcePermissions ), $metadata['fe_groups'] )
+                );
+                }
+            else {
+                $metadata['fe_groups'] = $resourcePermissions;
+                }
+            }
 
-        $metaDataArrayObject = new \ArrayObject( $event->getMetaData() );
-        $item                = $event->getFileIndexQueueItem();
-        $this->solrFalAspect->fileMetaDataRetrieved( $item, $metaDataArrayObject );
+        // Re-generate public url
+        $this->publicUrlAspect->setEnabled( false );
+        $metadata['public_url'] = $item->getFile()->getPublicUrl();
+        $this->publicUrlAspect->setEnabled( true );
+
+        $event->overrideMetaData( $metadata );
         }
     }
